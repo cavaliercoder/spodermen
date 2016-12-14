@@ -2,6 +2,8 @@ all: spodermen
 
 spodermen_files = \
 	main.go \
+	crawl_request.go \
+	crawl_response.go \
 	crawler.go \
 	queue.go
 

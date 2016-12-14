@@ -11,7 +11,6 @@ import (
 const (
 	WORKERS    = 4
 	POLL_SLEEP = 3 * time.Second
-	BUFFER_LEN = 4096
 )
 
 func main() {
@@ -19,16 +18,19 @@ func main() {
 		os.Exit(usage(1))
 	}
 
-	queue := NewQueue(BUFFER_LEN)
-	defer queue.Close()
+	crawler := NewCrawler()
 
 	// start workers
 	for i := 0; i < WORKERS; i++ {
 		go func(i int) {
 			printf("Starting worker %d\n", i+1)
 			for {
-				resp, _ := crawl(queue)
-				printf("%v\n", resp)
+				resp, err := crawler.Next()
+				if err != nil {
+					errorf("%v\n", err)
+				} else {
+					printf("%v\n", resp)
+				}
 			}
 		}(i)
 	}
@@ -36,7 +38,8 @@ func main() {
 	// enqueue entry point
 	req, err := NewCrawlRequest(os.Args[1])
 	panicOn(err)
-	queue.Enqueue(req)
+
+	crawler.Start(req)
 
 	for {
 		time.Sleep(3 * time.Second)

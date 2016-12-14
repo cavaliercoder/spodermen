@@ -5,69 +5,93 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
 )
 
-// regexp pattern to match href anchors
-var pattern = regexp.MustCompile(`href\s*=\s*"([^"]*)"`)
+const (
+	USER_AGENT = "Spodermen bot/1.0"
+)
 
-type CrawlRequest struct {
-	URL *url.URL
+var (
+	// regexp pattern to match href anchors
+	pattern = regexp.MustCompile(`href\s*=\s*"([^"]*)"`)
+)
+
+type Crawler interface {
+	Do(*CrawlRequest) (*CrawlResponse, error)
+	Next() (*CrawlResponse, error)
+	Start(...*CrawlRequest)
 }
 
-type CrawlResponse struct {
-	Request       *CrawlRequest
-	Duration      time.Duration
-	StatusCode    int
-	ContentLength int
+type crawler struct {
+	client *http.Client
+	queue  Queue
 }
 
-func (c *CrawlResponse) String() string {
-	return fmt.Sprintf("GET %v %v %v %v", c.Request.URL.Path, c.StatusCode, c.ContentLength, int(c.Duration/1000000))
+func NewCrawler() Crawler {
+	return &crawler{
+		client: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConnsPerHost: 20,
+			},
+			Timeout: time.Duration(time.Second * 10),
+		},
+		queue: NewQueue(),
+	}
 }
 
-func NewCrawlRequest(urlStr string) (*CrawlRequest, error) {
-	uri, err := url.Parse(urlStr)
+func (c *crawler) Start(reqs ...*CrawlRequest) {
+	for _, req := range reqs {
+		c.queue.Enqueue(req)
+	}
+}
+
+func (c *crawler) Next() (*CrawlResponse, error) {
+	req := c.queue.Dequeue()
+	return c.Do(req)
+}
+
+func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
+	resp := &CrawlResponse{
+		Request: req,
+	}
+
+	hreq, err := http.NewRequest("GET", req.URL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-
-	return &CrawlRequest{uri}, nil
-}
-
-func crawl(queue Queue) (*CrawlResponse, error) {
-	target := queue.Dequeue()
-	cresp := &CrawlResponse{
-		Request: target,
-	}
-
-	req, err := http.NewRequest("GET", target.URL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
+	hreq.Header.Set("User-Agent", USER_AGENT)
 
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	hresp, err := c.client.Do(hreq)
 	if err != nil {
 		return nil, err
 	}
 
 	body := ""
 	if err := func() error {
-		defer resp.Body.Close()
-		b, err := ioutil.ReadAll(resp.Body)
+		defer hresp.Body.Close()
+		b, err := ioutil.ReadAll(hresp.Body)
 		body = string(b)
-		cresp.ContentLength = len(b)
+		resp.ContentLength = len(b)
 		return err
 	}(); err != nil {
 		return nil, err
 	}
 
-	cresp.Duration = time.Since(start)
-	cresp.StatusCode = resp.StatusCode
+	resp.Duration = time.Since(start)
+	resp.StatusCode = hresp.StatusCode
+	resp.ContentType = hresp.Header.Get("Content-Type")
+	if resp.ContentType == "" {
+		resp.ContentType = "-"
+	} else {
+		// strip after ;
+		if n := strings.Index(resp.ContentType, ";"); n != -1 {
+			resp.ContentType = resp.ContentType[:n]
+		}
+	}
 
 	hrefs, err := getHrefs(strings.NewReader(body))
 	if err != nil {
@@ -78,16 +102,16 @@ func crawl(queue Queue) (*CrawlResponse, error) {
 		// TODO: match all domain-local URIs
 		if strings.HasPrefix(href, "/") {
 			// TODO: deep copy target.URL.User
-			uri := *target.URL
+			uri := *req.URL
 			uri.Path = href
 
-			queue.Enqueue(&CrawlRequest{
+			c.queue.Enqueue(&CrawlRequest{
 				URL: &uri,
 			})
 		}
 	}
 
-	return cresp, nil
+	return resp, nil
 }
 
 func getHrefs(r io.Reader) ([]string, error) {

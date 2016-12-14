@@ -6,10 +6,14 @@ type Queue interface {
 	Close()
 }
 
-func NewQueue(n int) Queue {
+const (
+	QUEUE_LEN = 1024
+)
+
+func NewQueue() Queue {
 	c := &queue{
-		in:  make(chan *CrawlRequest, n),
-		out: make(chan *CrawlRequest, n),
+		in:  make(chan *CrawlRequest, QUEUE_LEN),
+		out: make(chan *CrawlRequest, QUEUE_LEN),
 	}
 
 	// filter the out queue of duplicates
