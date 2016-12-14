@@ -18,6 +18,17 @@ type CrawlRequest struct {
 	URL *url.URL
 }
 
+type CrawlResponse struct {
+	Request       *CrawlRequest
+	Duration      time.Duration
+	StatusCode    int
+	ContentLength int
+}
+
+func (c *CrawlResponse) String() string {
+	return fmt.Sprintf("GET %v %v %v %v", c.Request.URL.Path, c.StatusCode, c.ContentLength, int(c.Duration/1000000))
+}
+
 func NewCrawlRequest(urlStr string) (*CrawlRequest, error) {
 	uri, err := url.Parse(urlStr)
 	if err != nil {
@@ -27,51 +38,56 @@ func NewCrawlRequest(urlStr string) (*CrawlRequest, error) {
 	return &CrawlRequest{uri}, nil
 }
 
-func crawl(target *CrawlRequest) <-chan *CrawlRequest {
-	ch := make(chan *CrawlRequest, 0)
-	go func() {
-		defer close(ch)
+func crawl(queue Queue) (*CrawlResponse, error) {
+	target := queue.Dequeue()
+	cresp := &CrawlResponse{
+		Request: target,
+	}
 
-		req, err := http.NewRequest("GET", target.URL.String(), nil)
-		panicOn(err) // TODO: smarter handling of bad URLs
+	req, err := http.NewRequest("GET", target.URL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
-		start := time.Now()
-		resp, err := http.DefaultClient.Do(req)
-		panicOn(err) // TODO: smarter handling of transit errors
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
 
-		body := ""
-		length := -1
-		if err := func() error {
-			defer resp.Body.Close()
-			b, err := ioutil.ReadAll(resp.Body)
-			body = string(b)
-			length = len(b)
-			return err
-		}(); err != nil {
-			errorf("%v\n", err)
-			return
+	body := ""
+	if err := func() error {
+		defer resp.Body.Close()
+		b, err := ioutil.ReadAll(resp.Body)
+		body = string(b)
+		cresp.ContentLength = len(b)
+		return err
+	}(); err != nil {
+		return nil, err
+	}
+
+	cresp.Duration = time.Since(start)
+	cresp.StatusCode = resp.StatusCode
+
+	hrefs, err := getHrefs(strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, href := range hrefs {
+		// TODO: match all domain-local URIs
+		if strings.HasPrefix(href, "/") {
+			// TODO: deep copy target.URL.User
+			uri := *target.URL
+			uri.Path = href
+
+			queue.Enqueue(&CrawlRequest{
+				URL: &uri,
+			})
 		}
+	}
 
-		ms := int(time.Since(start) / 1000000)
-		printf("%v %v %v %v %v\n", req.Method, req.URL.Path, resp.StatusCode, length, ms)
-		hrefs, err := getHrefs(strings.NewReader(body))
-		panicOn(err) // TODO: smarted handling of parser errors
-
-		for _, href := range hrefs {
-			// TODO: match all domain-local URIs
-			if strings.HasPrefix(href, "/") {
-				// TODO: deep copy target.URL.User
-				uri := *target.URL
-				uri.Path = href
-
-				ch <- &CrawlRequest{
-					URL: &uri,
-				}
-			}
-		}
-	}()
-
-	return ch
+	return cresp, nil
 }
 
 func getHrefs(r io.Reader) ([]string, error) {

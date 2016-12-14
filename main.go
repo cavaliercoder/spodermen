@@ -11,6 +11,7 @@ import (
 const (
 	WORKERS    = 4
 	POLL_SLEEP = 3 * time.Second
+	BUFFER_LEN = 4096
 )
 
 func main() {
@@ -18,58 +19,16 @@ func main() {
 		os.Exit(usage(1))
 	}
 
-	// history of visited uris
-	history := make(map[string]int, 4096)
-
-	// queue of all found hrefs
-	triage := make(chan *CrawlRequest, 4096)
-	defer close(triage)
-
-	// queue of unique hrefs
-	ready := make(chan *CrawlRequest, 4096)
-	defer close(ready)
-
-	// semaphore of requests in flight (needed because requests are dequeued
-	// when they start; not when they finish)
-	queued := make(chan int, 4096)
-	defer close(queued)
-
-	// start a loop to filter for unique hrefs
-	go func() {
-		for req := range triage {
-			uri := req.URL.String()
-			if _, ok := history[uri]; ok {
-				history[uri]++
-			} else {
-				history[uri] = 1
-				queued <- 1
-				go func(req *CrawlRequest) {
-					ready <- req
-				}(req)
-			}
-		}
-	}()
-
-	// async func to enqueue a found href for triage
-	enqueue := func(a ...*CrawlRequest) {
-		go func() {
-			for _, req := range a {
-				triage <- req
-			}
-		}()
-	}
+	queue := NewQueue(BUFFER_LEN)
+	defer queue.Close()
 
 	// start workers
 	for i := 0; i < WORKERS; i++ {
 		go func(i int) {
 			printf("Starting worker %d\n", i+1)
 			for {
-				req := <-ready
-				ch := crawl(req)
-				for resp := range ch {
-					enqueue(resp)
-				}
-				queued <- -1
+				resp, _ := crawl(queue)
+				printf("%v\n", resp)
 			}
 		}(i)
 	}
@@ -77,21 +36,11 @@ func main() {
 	// enqueue entry point
 	req, err := NewCrawlRequest(os.Args[1])
 	panicOn(err)
-	enqueue(req)
+	queue.Enqueue(req)
 
-	inFlight := 0
-	done := make(chan bool)
-	go func() {
-		for {
-			inFlight += <-queued
-			if inFlight == 0 {
-				break
-			}
-		}
-		close(done)
-	}()
-
-	<-done
+	for {
+		time.Sleep(3 * time.Second)
+	}
 
 	printf("Dolan, y u do dis?\n")
 }
