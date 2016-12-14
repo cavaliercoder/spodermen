@@ -18,6 +18,8 @@ func main() {
 		os.Exit(usage(1))
 	}
 
+	panicOn(initOutput())
+
 	crawler := NewCrawler()
 
 	// start workers
