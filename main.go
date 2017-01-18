@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"gopkg.in/urfave/cli.v1"
 	"os"
+	"runtime"
 	"time"
 )
 
@@ -16,7 +17,6 @@ const (
 )
 
 const (
-	WORKERS    = 4
 	POLL_SLEEP = 3 * time.Second
 )
 
@@ -34,6 +34,11 @@ func main() {
 		cli.StringFlag{
 			Name:  "prefix,p",
 			Usage: "prefix all URLs with `PREF`",
+		},
+		cli.IntFlag{
+			Name:  "workers,w",
+			Usage: "worker count",
+			Value: runtime.NumCPU(),
 		},
 		cli.BoolFlag{
 			Name:  "no-follow",
@@ -67,7 +72,8 @@ func crawl(c *cli.Context) error {
 
 	// start workers
 	crawler := NewCrawler(opts)
-	for i := 0; i < WORKERS; i++ {
+	workers := c.Int("workers")
+	for i := 0; i < workers; i++ {
 		go func(i int) {
 			printf("Starting worker %d\n", i+1)
 			for {
