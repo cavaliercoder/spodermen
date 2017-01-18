@@ -26,11 +26,16 @@ type Crawler interface {
 }
 
 type crawler struct {
-	client *http.Client
-	queue  Queue
+	client  *http.Client
+	queue   Queue
+	options *CrawlOptions
 }
 
-func NewCrawler() Crawler {
+type CrawlOptions struct {
+	NoFollow bool
+}
+
+func NewCrawler(opts *CrawlOptions) Crawler {
 	return &crawler{
 		client: &http.Client{
 			Transport: &http.Transport{
@@ -38,7 +43,8 @@ func NewCrawler() Crawler {
 			},
 			Timeout: time.Duration(time.Second * 10),
 		},
-		queue: NewQueue(),
+		queue:   NewQueue(),
+		options: opts,
 	}
 }
 
@@ -93,21 +99,23 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		}
 	}
 
-	hrefs, err := getHrefs(strings.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
+	if !c.options.NoFollow {
+		hrefs, err := getHrefs(strings.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
 
-	for _, href := range hrefs {
-		// TODO: match all domain-local URIs
-		if strings.HasPrefix(href, "/") {
-			// TODO: deep copy target.URL.User
-			uri := *req.URL
-			uri.Path = href
+		for _, href := range hrefs {
+			// TODO: match all domain-local URIs
+			if strings.HasPrefix(href, "/") {
+				// TODO: deep copy target.URL.User
+				uri := *req.URL
+				uri.Path = href
 
-			c.queue.Enqueue(&CrawlRequest{
-				URL: &uri,
-			})
+				c.queue.Enqueue(&CrawlRequest{
+					URL: &uri,
+				})
+			}
 		}
 	}
 

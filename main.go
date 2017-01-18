@@ -3,9 +3,16 @@ package main
 // TODO: implement keep-alive
 
 import (
+	"bufio"
 	"fmt"
+	"gopkg.in/urfave/cli.v1"
 	"os"
 	"time"
+)
+
+const (
+	PACKAGE_NAME    = "spodermen"
+	PACKAGE_VERSION = "1.0.0"
 )
 
 const (
@@ -14,15 +21,52 @@ const (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		os.Exit(usage(1))
+	app := cli.NewApp()
+	app.Name = PACKAGE_NAME
+	app.Version = PACKAGE_VERSION
+	app.Usage = "A dumb site crawler to highlight broken links and faulty routes"
+	app.Action = crawl
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:  "file,f",
+			Usage: "read URLs from `FILE`",
+		},
+		cli.StringFlag{
+			Name:  "prefix,p",
+			Usage: "prefix all URLs with `PREF`",
+		},
+		cli.BoolFlag{
+			Name:  "no-follow",
+			Usage: "don't follow links",
+		},
 	}
 
-	panicOn(initOutput())
+	app.Run(os.Args)
+}
 
-	crawler := NewCrawler()
+func crawl(c *cli.Context) error {
+	// init output templates
+	if err := initOutput(); err != nil {
+		return err
+	}
+
+	urls := []string{}
+	if path := c.String("file"); path != "" {
+		if v, err := loadURLFile(path, c.String("prefix")); err != nil {
+			return err
+		} else {
+			urls = v
+		}
+	} else {
+		urls = []string(c.Args())
+	}
+
+	opts := &CrawlOptions{
+		NoFollow: c.Bool("no-follow"),
+	}
 
 	// start workers
+	crawler := NewCrawler(opts)
 	for i := 0; i < WORKERS; i++ {
 		go func(i int) {
 			printf("Starting worker %d\n", i+1)
@@ -37,27 +81,47 @@ func main() {
 		}(i)
 	}
 
-	// enqueue entry point
-	req, err := NewCrawlRequest(os.Args[1])
-	panicOn(err)
+	reqs := make([]*CrawlRequest, len(urls))
+	for i, u := range urls {
+		req, err := NewCrawlRequest(u)
+		if err != nil {
+			return err
+		}
+		reqs[i] = req
+	}
 
-	crawler.Start(req)
+	crawler.Start(reqs...)
 
 	for {
 		time.Sleep(3 * time.Second)
 	}
 
 	printf("Dolan, y u do dis?\n")
+
+	return nil
 }
 
-func usage(exitCode int) int {
-	w := os.Stdout
-	if exitCode > 0 {
-		w = os.Stderr
+func loadURLFile(path, prefix string) ([]string, error) {
+	var err error
+	f := os.Stdin
+	if path != "-" {
+		f, err = os.Open(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	fmt.Fprintf(w, "usage: %s [url]\n", os.Args[0])
-	return exitCode
+	urls := make([]string, 0)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		urls = append(urls, prefix+scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return urls, nil
 }
 
 func panicOn(err error) {
