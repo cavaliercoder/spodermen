@@ -2,13 +2,14 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"text/template"
 	"time"
 )
 
 const (
 	// CrawlResponseTemplate is the template used to print the outcome of a CrawlRequest.
-	CrawlResponseTemplate = "GET {{.Request.URL}} {{.StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}"
+	CrawlResponseTemplate = "\x1b[95mGET\x1b[0m {{.Request.URL}} {{colorize .StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}"
 )
 
 var crawlResponseTemplate = func() *template.Template {
@@ -16,6 +17,12 @@ var crawlResponseTemplate = func() *template.Template {
 		Funcs(template.FuncMap{
 			"ms": func(d time.Duration) int {
 				return int(d.Nanoseconds() / 1000000)
+			},
+			"colorize": func(status int) string {
+				if status >= 200 && status < 400 {
+					return fmt.Sprintf("\x1b[32m%d\x1b[0m", status)
+				}
+				return fmt.Sprintf("\x1b[31m%d\x1b[0m", status)
 			},
 		}).
 		Parse(CrawlResponseTemplate)

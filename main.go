@@ -142,7 +142,7 @@ func crawl(c *cli.Context) error {
 							urls <- u
 						}
 					}
-					printf("%v\n", resp)
+					printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
 				}
 			}
 			wg.Done()
