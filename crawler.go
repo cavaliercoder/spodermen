@@ -5,19 +5,15 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 const (
 	// UserAgent is the UserAgent header set for all HTTP requests.
 	UserAgent = "Spodermen bot/1.0"
-)
-
-var (
-	// regexp pattern to match href anchors
-	pattern = regexp.MustCompile(`href\s*=\s*"([^"]*)"`)
 )
 
 type Crawler interface {
@@ -94,7 +90,6 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		for _, href := range hrefs {
 			// TODO: match all domain-local URIs
 			if strings.HasPrefix(href, "/") {
-				// TODO: deep copy target.URL.User
 				uri, err := req.URL.Parse(href)
 				if err != nil {
 					continue // ignore broken URLs
@@ -113,25 +108,24 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 	return resp, nil
 }
 
+// getHrefs uses the HTML tokenizer to find any URLs stored in href or src
+// attributes (of any element type) in the HTML document.
 func getHrefs(r io.Reader) ([]string, error) {
-	if r == nil {
-		return nil, fmt.Errorf("Reader is nil")
-	}
-
-	b, err := ioutil.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-
-	matches := pattern.FindAllSubmatch(b, -1)
-	if matches != nil {
-		reqs := make([]string, len(matches))
-		for i, match := range matches {
-			reqs[i] = string(match[1])
+	urls := make([]string, 0)
+	z := html.NewTokenizer(r)
+	for z.Err() != io.EOF {
+		if tt := z.Next(); tt == html.StartTagToken {
+			for {
+				k, v, ok := z.TagAttr()
+				switch string(k) {
+				case "href", "src":
+					urls = append(urls, string(v))
+				}
+				if !ok {
+					break
+				}
+			}
 		}
-
-		return reqs, nil
 	}
-
-	return nil, nil
+	return urls, nil
 }
