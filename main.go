@@ -5,10 +5,14 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"gopkg.in/urfave/cli.v1"
 	"os"
 	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"gopkg.in/urfave/cli.v1"
 )
 
 const (
@@ -50,20 +54,22 @@ func main() {
 }
 
 func crawl(c *cli.Context) error {
-	// init output templates
-	if err := initOutput(); err != nil {
-		return err
-	}
-
-	urls := []string{}
+	// urls is the channel that receives all URLs to be crawled
+	urls := make(chan string, 4096)
 	if path := c.String("file"); path != "" {
-		if v, err := loadURLFile(path, c.String("prefix")); err != nil {
+		// read URL list from a text file
+		v, err := loadURLFile(path, c.String("prefix"))
+		if err != nil {
 			return err
-		} else {
-			urls = v
+		}
+		for _, u := range v {
+			urls <- u
 		}
 	} else {
-		urls = []string(c.Args())
+		// read URL list from Args
+		for _, u := range c.Args() {
+			urls <- u
+		}
 	}
 
 	opts := &CrawlOptions{
@@ -71,42 +77,81 @@ func crawl(c *cli.Context) error {
 	}
 
 	// start workers
-	crawler := NewCrawler(opts)
+	var waiting int32
 	workers := c.Int("workers")
+	wg := &sync.WaitGroup{}
+	wg.Add(workers)
+	crawler := NewCrawler(opts)
+	reqQueue := make(chan *CrawlRequest, 4096)
 	for i := 0; i < workers; i++ {
 		go func(i int) {
 			printf("Starting worker %d\n", i+1)
 			for {
-				resp, err := crawler.Next()
+				atomic.AddInt32(&waiting, 1)
+				req := <-reqQueue
+				atomic.AddInt32(&waiting, -1)
+				if req == nil {
+					break
+				}
+
+				resp, err := crawler.Do(req)
 				if err != nil {
 					errorf("%v\n", err)
 				} else {
+					if len(resp.URLs) > 0 {
+						for _, u := range resp.URLs {
+							urls <- u
+						}
+					}
 					printf("%v\n", resp)
 				}
 			}
+			wg.Done()
 		}(i)
 	}
 
-	reqs := make([]*CrawlRequest, len(urls))
-	for i, u := range urls {
-		req, err := NewCrawlRequest(u)
-		if err != nil {
-			return err
-		}
-		reqs[i] = req
-	}
-
-	crawler.Start(reqs...)
-
+	// start producer
+	stats := make(map[string]int)
 	for {
-		time.Sleep(3 * time.Second)
+		// break if queue is empty and all workers are waiting
+		// TODO: prevent early exit when using only one worker.
+		v := atomic.LoadInt32(&waiting)
+		l := len(urls)
+		if int(v) == workers && l == 0 {
+			close(reqQueue)
+			break
+		}
+
+		select {
+		case url := <-urls:
+			// ignore URL fragment
+			if i := strings.Index(url, "#"); i != -1 {
+				url = url[:i]
+			}
+
+			// dedupe requests
+			stat := stats[url]
+			if stat > 0 {
+				continue
+			}
+			stats[url]++
+
+			req, err := NewCrawlRequest(url, nil)
+			if err != nil {
+				panic(err) // TODO
+			}
+			reqQueue <- req
+		default:
+		}
 	}
 
+	wg.Wait()
 	printf("Dolan, y u do dis?\n")
 
 	return nil
 }
 
+// loadURLFile reads a list of URLs from a text file; one URL per line.
 func loadURLFile(path, prefix string) ([]string, error) {
 	var err error
 	f := os.Stdin

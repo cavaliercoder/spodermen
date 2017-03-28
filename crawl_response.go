@@ -7,36 +7,33 @@ import (
 )
 
 const (
-	CRAWL_RESPONSE_TEMPLATE = "GET {{.Request.URL.Path}} {{.StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}"
+	// CrawlResponseTemplate is the template used to print the outcome of a CrawlRequest.
+	CrawlResponseTemplate = "GET {{.Request.URL}} {{.StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}"
 )
 
-var (
-	crawlResponseTemplate = template.New("crawl_response")
-)
-
-func initOutput() error {
+var crawlResponseTemplate = func() *template.Template {
 	t, err := template.New("crawl_response").
 		Funcs(template.FuncMap{
 			"ms": func(d time.Duration) int {
 				return int(d.Nanoseconds() / 1000000)
 			},
 		}).
-		Parse(CRAWL_RESPONSE_TEMPLATE)
+		Parse(CrawlResponseTemplate)
 	if err != nil {
-		return err
+		panic(err)
 	}
 
-	crawlResponseTemplate = t
+	return t
+}()
 
-	return nil
-}
-
+// A CrawlResponse is represents the outcome of a CrawlRequest.
 type CrawlResponse struct {
 	Request       *CrawlRequest
 	Duration      time.Duration
 	StatusCode    int
 	ContentLength int
 	ContentType   string
+	URLs          []string
 }
 
 func (c *CrawlResponse) String() string {

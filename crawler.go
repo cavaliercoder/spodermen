@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	USER_AGENT = "Spodermen bot/1.0"
+	// UserAgent is the UserAgent header set for all HTTP requests.
+	UserAgent = "Spodermen bot/1.0"
 )
 
 var (
@@ -21,13 +22,10 @@ var (
 
 type Crawler interface {
 	Do(*CrawlRequest) (*CrawlResponse, error)
-	Next() (*CrawlResponse, error)
-	Start(...*CrawlRequest)
 }
 
 type crawler struct {
 	client  *http.Client
-	queue   Queue
 	options *CrawlOptions
 }
 
@@ -43,20 +41,8 @@ func NewCrawler(opts *CrawlOptions) Crawler {
 			},
 			Timeout: time.Duration(time.Second * 10),
 		},
-		queue:   NewQueue(),
 		options: opts,
 	}
-}
-
-func (c *crawler) Start(reqs ...*CrawlRequest) {
-	for _, req := range reqs {
-		c.queue.Enqueue(req)
-	}
-}
-
-func (c *crawler) Next() (*CrawlResponse, error) {
-	req := c.queue.Dequeue()
-	return c.Do(req)
 }
 
 func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
@@ -68,7 +54,7 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	hreq.Header.Set("User-Agent", USER_AGENT)
+	hreq.Header.Set("User-Agent", UserAgent)
 
 	start := time.Now()
 	hresp, err := c.client.Do(hreq)
@@ -109,13 +95,18 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 			// TODO: match all domain-local URIs
 			if strings.HasPrefix(href, "/") {
 				// TODO: deep copy target.URL.User
-				uri := *req.URL
-				uri.Path = href
-
-				c.queue.Enqueue(&CrawlRequest{
-					URL: &uri,
-				})
+				uri, err := req.URL.Parse(href)
+				if err != nil {
+					continue // ignore broken URLs
+				}
+				resp.URLs = append(resp.URLs, uri.String())
 			}
+		}
+	}
+
+	if req.Callback != nil {
+		if err := req.Callback(resp); err != nil {
+			return resp, fmt.Errorf("error in callback for %v: %v", req, err)
 		}
 	}
 
