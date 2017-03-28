@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,8 +21,8 @@ const (
 	PackageVersion = "1.0.0"
 )
 
-const (
-	POLL_SLEEP = 3 * time.Second
+var (
+	stopFlag int32
 )
 
 func main() {
@@ -50,6 +51,7 @@ func main() {
 		},
 	}
 
+	handleSignals()
 	app.Run(os.Args)
 }
 
@@ -82,8 +84,14 @@ func crawl(c *cli.Context) error {
 
 	// start producer
 	go func() {
-		stats := make(map[string]int)
+		seen := make(map[string]int)
 		for {
+			// break if signalled
+			if v := atomic.LoadInt32(&stopFlag); v != 0 {
+				close(reqQueue)
+				break
+			}
+
 			// break if queue is empty and all workers are waiting
 			// TODO: prevent early exit when using only one worker.
 			v := atomic.LoadInt32(&waiting)
@@ -101,11 +109,11 @@ func crawl(c *cli.Context) error {
 				}
 
 				// dedupe requests
-				stat := stats[url]
-				if stat > 0 {
+				count := seen[url]
+				if count > 0 {
 					continue
 				}
-				stats[url]++
+				seen[url]++
 
 				req, err := NewCrawlRequest(url, nil)
 				if err != nil {
@@ -124,8 +132,12 @@ func crawl(c *cli.Context) error {
 	for i := 0; i < workers; i++ {
 		time.Sleep(time.Millisecond * 100) // slow start
 		go func(i int) {
-			//printf("Starting worker %d\n", i+1)
 			for {
+				// break if signalled
+				if v := atomic.LoadInt32(&stopFlag); v != 0 {
+					break
+				}
+
 				atomic.AddInt32(&waiting, 1)
 				req := <-reqQueue
 				atomic.AddInt32(&waiting, -1)
@@ -154,6 +166,18 @@ func crawl(c *cli.Context) error {
 	printf("%v\n", crawler.Stats().JSON())
 
 	return nil
+}
+
+func handleSignals() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	signal.Notify(ch, os.Kill)
+
+	go func() {
+		s := <-ch
+		atomic.AddInt32(&stopFlag, 1)
+		fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
+	}()
 }
 
 // loadURLFile reads a list of URLs from a text file; one URL per line.
