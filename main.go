@@ -151,6 +151,7 @@ func crawl(c *cli.Context) error {
 
 	wg.Wait()
 	printf("Dolan, y u do dis?\n")
+	printf("%v\n", crawler.Stats().JSON())
 
 	return nil
 }

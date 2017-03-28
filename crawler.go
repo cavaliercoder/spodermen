@@ -16,11 +16,13 @@ var UserAgent = fmt.Sprintf("%s bot/%s", PackageName, PackageVersion)
 
 type Crawler interface {
 	Do(*CrawlRequest) (*CrawlResponse, error)
+	Stats() *CrawlerStats
 }
 
 type crawler struct {
 	client  *http.Client
 	options *CrawlOptions
+	stats   CrawlerStats
 }
 
 type CrawlOptions struct {
@@ -106,7 +108,13 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		}
 	}
 
+	c.stats.AddResponse(resp)
+
 	return resp, nil
+}
+
+func (c *crawler) Stats() *CrawlerStats {
+	return &c.stats
 }
 
 // getHrefs uses the HTML tokenizer to find any URLs stored in href or src
