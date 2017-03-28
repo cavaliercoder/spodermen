@@ -76,16 +76,55 @@ func crawl(c *cli.Context) error {
 		NoFollow: c.Bool("no-follow"),
 	}
 
-	// start workers
 	var waiting int32
 	workers := c.Int("workers")
+	reqQueue := make(chan *CrawlRequest, 4096)
+
+	// start producer
+	go func() {
+		stats := make(map[string]int)
+		for {
+			// break if queue is empty and all workers are waiting
+			// TODO: prevent early exit when using only one worker.
+			v := atomic.LoadInt32(&waiting)
+			l := len(urls)
+			if int(v) == workers && l == 0 {
+				close(reqQueue)
+				break
+			}
+
+			select {
+			case url := <-urls:
+				// ignore URL fragment
+				if i := strings.Index(url, "#"); i != -1 {
+					url = url[:i]
+				}
+
+				// dedupe requests
+				stat := stats[url]
+				if stat > 0 {
+					continue
+				}
+				stats[url]++
+
+				req, err := NewCrawlRequest(url, nil)
+				if err != nil {
+					panic(err) // TODO
+				}
+				reqQueue <- req
+			default:
+			}
+		}
+	}()
+
+	// start workers
 	wg := &sync.WaitGroup{}
 	wg.Add(workers)
 	crawler := NewCrawler(opts)
-	reqQueue := make(chan *CrawlRequest, 4096)
 	for i := 0; i < workers; i++ {
+		time.Sleep(time.Millisecond * 100) // slow start
 		go func(i int) {
-			printf("Starting worker %d\n", i+1)
+			//printf("Starting worker %d\n", i+1)
 			for {
 				atomic.AddInt32(&waiting, 1)
 				req := <-reqQueue
@@ -108,41 +147,6 @@ func crawl(c *cli.Context) error {
 			}
 			wg.Done()
 		}(i)
-	}
-
-	// start producer
-	stats := make(map[string]int)
-	for {
-		// break if queue is empty and all workers are waiting
-		// TODO: prevent early exit when using only one worker.
-		v := atomic.LoadInt32(&waiting)
-		l := len(urls)
-		if int(v) == workers && l == 0 {
-			close(reqQueue)
-			break
-		}
-
-		select {
-		case url := <-urls:
-			// ignore URL fragment
-			if i := strings.Index(url, "#"); i != -1 {
-				url = url[:i]
-			}
-
-			// dedupe requests
-			stat := stats[url]
-			if stat > 0 {
-				continue
-			}
-			stats[url]++
-
-			req, err := NewCrawlRequest(url, nil)
-			if err != nil {
-				panic(err) // TODO
-			}
-			reqQueue <- req
-		default:
-		}
 	}
 
 	wg.Wait()
