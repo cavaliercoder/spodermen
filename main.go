@@ -134,6 +134,7 @@ func crawl(c *cli.Context) error {
 		go func(i int) {
 			for {
 				// break if signalled
+				// TODO: use Context to stop requests in flight
 				if v := atomic.LoadInt32(&stopFlag); v != 0 {
 					break
 				}
@@ -177,6 +178,7 @@ func handleSignals() {
 		s := <-ch
 		atomic.AddInt32(&stopFlag, 1)
 		fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
+		// TODO: sleep and force kill
 	}()
 }
 
