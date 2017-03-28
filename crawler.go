@@ -88,13 +88,16 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		}
 
 		for _, href := range hrefs {
-			// TODO: match all domain-local URIs
 			if strings.HasPrefix(href, "/") {
 				uri, err := req.URL.Parse(href)
 				if err != nil {
 					continue // ignore broken URLs
 				}
-				resp.URLs = append(resp.URLs, uri.String())
+
+				// match only domain local URLs
+				if uri.Host == req.URL.Host {
+					resp.URLs = append(resp.URLs, uri.String())
+				}
 			}
 		}
 	}
