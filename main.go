@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	PACKAGE_NAME    = "spodermen"
-	PACKAGE_VERSION = "1.0.0"
+	PackageName    = "spodermen"
+	PackageVersion = "1.0.0"
 )
 
 const (
@@ -26,8 +26,8 @@ const (
 
 func main() {
 	app := cli.NewApp()
-	app.Name = PACKAGE_NAME
-	app.Version = PACKAGE_VERSION
+	app.Name = PackageName
+	app.Version = PackageVersion
 	app.Usage = "A dumb site crawler to highlight broken links and faulty routes"
 	app.Action = crawl
 	app.Flags = []cli.Flag{

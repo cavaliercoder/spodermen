@@ -11,10 +11,8 @@ import (
 	"golang.org/x/net/html"
 )
 
-const (
-	// UserAgent is the UserAgent header set for all HTTP requests.
-	UserAgent = "Spodermen bot/1.0"
-)
+// UserAgent is the UserAgent header set for all HTTP requests.
+var UserAgent = fmt.Sprintf("%s bot/%s", PackageName, PackageVersion)
 
 type Crawler interface {
 	Do(*CrawlRequest) (*CrawlResponse, error)
