@@ -127,11 +127,16 @@ func crawl(c *cli.Context) error {
 
 	// start workers
 	wg := &sync.WaitGroup{}
-	wg.Add(workers)
 	crawler := NewCrawler(opts)
 	for i := 0; i < workers; i++ {
 		time.Sleep(time.Millisecond * 100) // slow start
+		if v := atomic.LoadInt32(&stopFlag); v != 0 {
+			break
+		}
+
 		go func(i int) {
+			wg.Add(1)
+			defer wg.Done()
 			for {
 				// break if signalled
 				// TODO: use Context to stop requests in flight
@@ -158,7 +163,6 @@ func crawl(c *cli.Context) error {
 					printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
 				}
 			}
-			wg.Done()
 		}(i)
 	}
 
@@ -175,10 +179,16 @@ func handleSignals() {
 	signal.Notify(ch, os.Kill)
 
 	go func() {
-		s := <-ch
-		atomic.AddInt32(&stopFlag, 1)
-		fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
-		// TODO: sleep and force kill
+		for s := range ch {
+			v := atomic.AddInt32(&stopFlag, 1)
+			if v > 1 {
+				fmt.Fprintf(os.Stderr, "Caught %v - forcing exit...\n", s)
+				os.Exit(1)
+			}
+
+			fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
+			// TODO: sleep and force kill
+		}
 	}()
 }
 
