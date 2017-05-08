@@ -1,16 +1,23 @@
+prefix := /usr/local
+exec_prefix := $(prefix)
+bindir := $(exec_prefix)/bin
+
 all: spodermen
 
-spodermen_files = \
+SOURCES = \
 	main.go \
 	crawl_request.go \
 	crawl_response.go \
 	crawler.go \
 	crawler_stats.go
 
-spodermen: $(spodermen_files)
-	go build -x -o spodermen $(spodermen_files)
+spodermen: $(SOURCES)
+	go build -x -o spodermen $(SOURCES)
 
 clean:
 	go clean -x
+
+install:
+	install -v -C -m 0755 spodermen $(DESTDIR)$(bindir)/spodermen
 
 .PHONY: all clean
