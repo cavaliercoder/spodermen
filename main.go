@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"net/url"
+
 	"gopkg.in/urfave/cli.v1"
 )
 
@@ -45,6 +47,10 @@ func main() {
 			Usage: "worker count",
 			Value: runtime.NumCPU(),
 		},
+		cli.StringSliceFlag{
+			Name:  "follow-hosts,a",
+			Usage: "allow links on additional hosts",
+		},
 		cli.BoolFlag{
 			Name:  "no-follow",
 			Usage: "don't follow links",
@@ -56,6 +62,15 @@ func main() {
 }
 
 func crawl(c *cli.Context) error {
+	opts := &CrawlOptions{
+		NoFollow: c.Bool("no-follow"),
+		Hosts:    make(map[string]bool),
+	}
+
+	for _, s := range c.StringSlice("follow-hosts") {
+		opts.Hosts[s] = true
+	}
+
 	// urls is the channel that receives all URLs to be crawled
 	urls := make(chan string, 4096)
 	if path := c.String("file"); path != "" {
@@ -70,12 +85,14 @@ func crawl(c *cli.Context) error {
 	} else {
 		// read URL list from Args
 		for _, u := range c.Args() {
+			x, err := url.Parse(u)
+			if err != nil {
+				return err
+			}
+
+			opts.Hosts[x.Host] = true
 			urls <- u
 		}
-	}
-
-	opts := &CrawlOptions{
-		NoFollow: c.Bool("no-follow"),
 	}
 
 	var waiting int32
@@ -115,7 +132,7 @@ func crawl(c *cli.Context) error {
 				}
 				seen[url]++
 
-				req, err := NewCrawlRequest(url, nil)
+				req, err := NewCrawlRequest(url, !opts.NoFollow)
 				if err != nil {
 					panic(err) // TODO
 				}

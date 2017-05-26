@@ -38,7 +38,7 @@ type CrawlResponse struct {
 	Request       *CrawlRequest
 	Duration      time.Duration
 	StatusCode    int
-	ContentLength int
+	ContentLength int64
 	ContentType   string
 	URLs          []string
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"net/url"
+
 	"golang.org/x/net/html"
 )
 
@@ -27,6 +29,7 @@ type crawler struct {
 
 type CrawlOptions struct {
 	NoFollow bool
+	Hosts    map[string]bool
 }
 
 func NewCrawler(opts *CrawlOptions) Crawler {
@@ -61,9 +64,11 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 	body := ""
 	if err := func() error {
 		defer hresp.Body.Close()
-		b, err := ioutil.ReadAll(hresp.Body)
-		body = string(b)
-		resp.ContentLength = len(b)
+		b, err := ioutil.ReadAll(hresp.Body) // TODO: allow cancellation
+		resp.ContentLength = int64(len(b))
+		if strings.HasPrefix(hresp.Header.Get("Content-Type"), "text/html") {
+			body = string(b)
+		}
 		return err
 	}(); err != nil {
 		return nil, err
@@ -81,30 +86,26 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		}
 	}
 
-	if !c.options.NoFollow {
+	if req.Follow {
 		hrefs, err := getHrefs(strings.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 
 		for _, href := range hrefs {
+			var err error
+			var furl *url.URL
 			if strings.HasPrefix(href, "/") {
-				uri, err := req.URL.Parse(href)
-				if err != nil {
-					continue // ignore broken URLs
-				}
-
-				// match only domain local URLs
-				if uri.Host == req.URL.Host {
-					resp.URLs = append(resp.URLs, uri.String())
-				}
+				furl, err = req.URL.Parse(href)
+			} else {
+				furl, err = url.Parse(href)
 			}
-		}
-	}
-
-	if req.Callback != nil {
-		if err := req.Callback(resp); err != nil {
-			return resp, fmt.Errorf("error in callback for %v: %v", req, err)
+			if err != nil {
+				continue // ignore broken URLs
+			}
+			if c.options.Hosts[furl.Host] {
+				resp.URLs = append(resp.URLs, furl.String())
+			}
 		}
 	}
 
@@ -123,7 +124,7 @@ func getHrefs(r io.Reader) ([]string, error) {
 	urls := make([]string, 0)
 	z := html.NewTokenizer(r)
 	for z.Err() != io.EOF {
-		if tt := z.Next(); tt == html.StartTagToken {
+		if tt := z.Next(); tt == html.StartTagToken || tt == html.SelfClosingTagToken {
 			for {
 				k, v, ok := z.TagAttr()
 				switch string(k) {
