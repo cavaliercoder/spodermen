@@ -4,12 +4,7 @@ bindir := $(exec_prefix)/bin
 
 all: spodermen
 
-SOURCES = \
-	main.go \
-	crawl_request.go \
-	crawl_response.go \
-	crawler.go \
-	crawler_stats.go
+SOURCES = $(wildcard *.go)
 
 spodermen: $(SOURCES)
 	go build -x -o spodermen $(SOURCES)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -25,6 +26,7 @@ type crawler struct {
 	client  *http.Client
 	options *CrawlOptions
 	stats   CrawlerStats
+	ctx     context.Context
 }
 
 type CrawlOptions struct {
@@ -32,7 +34,7 @@ type CrawlOptions struct {
 	Hosts    map[string]bool
 }
 
-func NewCrawler(opts *CrawlOptions) Crawler {
+func NewCrawler(opts *CrawlOptions, ctx context.Context) Crawler {
 	return &crawler{
 		client: &http.Client{
 			Transport: &http.Transport{
@@ -41,6 +43,7 @@ func NewCrawler(opts *CrawlOptions) Crawler {
 			Timeout: time.Duration(time.Second * 10),
 		},
 		options: opts,
+		ctx:     ctx,
 	}
 }
 
@@ -53,6 +56,7 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	hreq = hreq.WithContext(c.ctx)
 	hreq.Header.Set("User-Agent", UserAgent)
 
 	start := time.Now()

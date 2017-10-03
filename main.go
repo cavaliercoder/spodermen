@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -27,7 +28,14 @@ var (
 	stopFlag int32
 )
 
+var (
+	ctx    context.Context
+	cancel context.CancelFunc
+)
+
 func main() {
+	ctx, cancel = context.WithCancel(context.Background())
+
 	app := cli.NewApp()
 	app.Name = PackageName
 	app.Version = PackageVersion
@@ -62,6 +70,8 @@ func main() {
 }
 
 func crawl(c *cli.Context) error {
+	q := NewCrawlRequestQueue(4096, ctx)
+
 	opts := &CrawlOptions{
 		NoFollow: c.Bool("no-follow"),
 		Hosts:    make(map[string]bool),
@@ -71,8 +81,6 @@ func crawl(c *cli.Context) error {
 		opts.Hosts[s] = true
 	}
 
-	// urls is the channel that receives all URLs to be crawled
-	urls := make(chan string, 4096)
 	if path := c.String("file"); path != "" {
 		// read URL list from a text file
 		v, err := loadURLFile(path, c.String("prefix"))
@@ -80,7 +88,11 @@ func crawl(c *cli.Context) error {
 			return err
 		}
 		for _, u := range v {
-			urls <- u
+			req, err := NewCrawlRequest(u, !opts.NoFollow)
+			if err != nil {
+				panic(err) // TODO
+			}
+			q.Enqueue(req)
 		}
 	} else {
 		// read URL list from Args
@@ -91,96 +103,54 @@ func crawl(c *cli.Context) error {
 			}
 
 			opts.Hosts[x.Host] = true
-			urls <- u
+
+			req, err := NewCrawlRequest(u, !opts.NoFollow)
+			if err != nil {
+				panic(err) // TODO
+			}
+			q.Enqueue(req)
 		}
 	}
 
-	var waiting int32
 	workers := c.Int("workers")
-	reqQueue := make(chan *CrawlRequest, 4096)
-
-	// start producer
-	go func() {
-		seen := make(map[string]int)
-		for {
-			// break if signalled
-			if v := atomic.LoadInt32(&stopFlag); v != 0 {
-				close(reqQueue)
-				break
-			}
-
-			// break if queue is empty and all workers are waiting
-			// TODO: prevent early exit when using only one worker.
-			v := atomic.LoadInt32(&waiting)
-			l := len(urls)
-			if int(v) == workers && l == 0 {
-				close(reqQueue)
-				break
-			}
-
-			select {
-			case url := <-urls:
-				// ignore URL fragment
-				if i := strings.Index(url, "#"); i != -1 {
-					url = url[:i]
-				}
-
-				// dedupe requests
-				count := seen[url]
-				if count > 0 {
-					continue
-				}
-				seen[url]++
-
-				req, err := NewCrawlRequest(url, !opts.NoFollow)
-				if err != nil {
-					panic(err) // TODO
-				}
-				reqQueue <- req
-			default:
-			}
-		}
-	}()
 
 	// start workers
 	wg := &sync.WaitGroup{}
-	crawler := NewCrawler(opts)
+	crawler := NewCrawler(opts, ctx)
 	for i := 0; i < workers; i++ {
-		time.Sleep(time.Millisecond * 100) // slow start
-		if v := atomic.LoadInt32(&stopFlag); v != 0 {
-			break
-		}
-
+		wg.Add(1)
 		go func(i int) {
-			wg.Add(1)
 			defer wg.Done()
 			for {
-				// break if signalled
-				// TODO: use Context to stop requests in flight
-				if v := atomic.LoadInt32(&stopFlag); v != 0 {
-					break
-				}
-
-				atomic.AddInt32(&waiting, 1)
-				req := <-reqQueue
-				atomic.AddInt32(&waiting, -1)
-				if req == nil {
+				req, ok := q.Dequeue()
+				if !ok {
 					break
 				}
 
 				resp, err := crawler.Do(req)
 				if err != nil {
 					errorf("%v\n", err)
-				} else {
-					if len(resp.URLs) > 0 {
-						for _, u := range resp.URLs {
-							urls <- u
-						}
-					}
-					printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
+					q.Done()
+					continue
 				}
+
+				reqs := make([]*CrawlRequest, 0, len(resp.URLs))
+				for _, u := range resp.URLs {
+					if i := strings.Index(u, "#"); i != -1 {
+						u = u[:i] // ignore URL fragment
+					}
+					req, err := NewCrawlRequest(u, !opts.NoFollow)
+					if err != nil {
+						panic(err) // TODO
+					}
+					reqs = append(reqs, req)
+				}
+				q.Enqueue(reqs...)
+				printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
+				q.Done()
 			}
 		}(i)
+		//time.Sleep(time.Millisecond * 100) // slow start
 	}
 
 	wg.Wait()
@@ -204,6 +174,7 @@ func handleSignals() {
 			}
 
 			fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
+			cancel()
 			// TODO: sleep and force kill
 		}
 	}()
