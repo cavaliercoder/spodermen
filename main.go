@@ -6,16 +6,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	"net/url"
-
+	"./crawler"
 	"gopkg.in/urfave/cli.v1"
 )
 
@@ -25,13 +21,12 @@ const (
 )
 
 var (
-	stopFlag int32
-)
-
-var (
 	ctx    context.Context
 	cancel context.CancelFunc
 )
+
+// UserAgent is the UserAgent header set for all HTTP requests.
+var UserAgent = fmt.Sprintf("%s bot/%s", PackageName, PackageVersion)
 
 func main() {
 	ctx, cancel = context.WithCancel(context.Background())
@@ -70,17 +65,21 @@ func main() {
 }
 
 func crawl(c *cli.Context) error {
-	q := NewCrawlRequestQueue(4096, ctx)
-
-	opts := &CrawlOptions{
-		NoFollow: c.Bool("no-follow"),
-		Hosts:    make(map[string]bool),
+	// configure crawler
+	opts := []crawler.Option{
+		crawler.UserAgentString(UserAgent),
+		crawler.WithContext(ctx),
+	}
+	noFollow := c.Bool("no-follow")
+	if noFollow {
+		opts = append(opts, crawler.NoFollow())
+	}
+	if hosts := c.StringSlice("follow-hosts"); hosts != nil {
+		opts = append(opts, crawler.FollowHosts(hosts...))
 	}
 
-	for _, s := range c.StringSlice("follow-hosts") {
-		opts.Hosts[s] = true
-	}
-
+	// seed request queue
+	q := crawler.NewQueue(4096, ctx)
 	if path := c.String("file"); path != "" {
 		// read URL list from a text file
 		v, err := loadURLFile(path, c.String("prefix"))
@@ -88,7 +87,7 @@ func crawl(c *cli.Context) error {
 			return err
 		}
 		for _, u := range v {
-			req, err := NewCrawlRequest(u, !opts.NoFollow)
+			req, err := crawler.NewRequest(u, !noFollow)
 			if err != nil {
 				panic(err) // TODO
 			}
@@ -101,10 +100,8 @@ func crawl(c *cli.Context) error {
 			if err != nil {
 				return err
 			}
-
-			opts.Hosts[x.Host] = true
-
-			req, err := NewCrawlRequest(u, !opts.NoFollow)
+			opts = append(opts, crawler.FollowHosts(x.Host))
+			req, err := crawler.NewRequest(u, !noFollow)
 			if err != nil {
 				panic(err) // TODO
 			}
@@ -112,50 +109,15 @@ func crawl(c *cli.Context) error {
 		}
 	}
 
-	workers := c.Int("workers")
-
 	// start workers
-	wg := &sync.WaitGroup{}
-	crawler := NewCrawler(opts, ctx)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			for {
-				req, ok := q.Dequeue()
-				if !ok {
-					break
-				}
-
-				resp, err := crawler.Do(req)
-				if err != nil {
-					errorf("%v\n", err)
-					q.Done()
-					continue
-				}
-
-				reqs := make([]*CrawlRequest, 0, len(resp.URLs))
-				for _, u := range resp.URLs {
-					if i := strings.Index(u, "#"); i != -1 {
-						u = u[:i] // ignore URL fragment
-					}
-					req, err := NewCrawlRequest(u, !opts.NoFollow)
-					if err != nil {
-						panic(err) // TODO
-					}
-					reqs = append(reqs, req)
-				}
-				q.Enqueue(reqs...)
-				printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
-				q.Done()
-			}
-		}(i)
-		//time.Sleep(time.Millisecond * 100) // slow start
+	workers := c.Int("workers")
+	crawler, err := crawler.New(opts...)
+	if err != nil {
+		panic(err)
 	}
-
-	wg.Wait()
-	printf("Dolan, y u do dis?\n")
-	printf("%v\n", crawler.Stats().JSON())
+	stats := crawler.Crawl(q, workers)
+	fmt.Println("Dolan, y u do dis?")
+	fmt.Println(stats.JSON())
 
 	return nil
 }
@@ -164,10 +126,10 @@ func handleSignals() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
 	signal.Notify(ch, os.Kill)
-
 	go func() {
+		v := 0
 		for s := range ch {
-			v := atomic.AddInt32(&stopFlag, 1)
+			v++
 			if v > 1 {
 				fmt.Fprintf(os.Stderr, "Caught %v - forcing exit...\n", s)
 				os.Exit(1)
@@ -175,7 +137,6 @@ func handleSignals() {
 
 			fmt.Fprintf(os.Stderr, "Caught %v - cleaning up...\n", s)
 			cancel()
-			// TODO: sleep and force kill
 		}
 	}()
 }
@@ -202,22 +163,4 @@ func loadURLFile(path, prefix string) ([]string, error) {
 	}
 
 	return urls, nil
-}
-
-func panicOn(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func printf(format string, a ...interface{}) {
-	fmt.Fprintf(os.Stdout, format, a...)
-}
-
-func dprintf(format string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, "DEBUG: %v", fmt.Sprintf(format, a...))
-}
-
-func errorf(format string, a ...interface{}) {
-	fmt.Fprintf(os.Stderr, format, a...)
 }

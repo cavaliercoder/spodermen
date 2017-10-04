@@ -1,4 +1,4 @@
-package main
+package crawler
 
 import (
 	"context"
@@ -6,58 +6,53 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"strings"
-	"time"
-
 	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 )
 
-// UserAgent is the UserAgent header set for all HTTP requests.
-var UserAgent = fmt.Sprintf("%s bot/%s", PackageName, PackageVersion)
-
-type Crawler interface {
-	Do(*CrawlRequest) (*CrawlResponse, error)
-	Stats() *CrawlerStats
+type Crawler struct {
+	client      *http.Client
+	useragent   string
+	noFollow    bool
+	followHosts map[string]bool
+	stats       Stats
+	ctx         context.Context
 }
 
-type crawler struct {
-	client  *http.Client
-	options *CrawlOptions
-	stats   CrawlerStats
-	ctx     context.Context
-}
-
-type CrawlOptions struct {
-	NoFollow bool
-	Hosts    map[string]bool
-}
-
-func NewCrawler(opts *CrawlOptions, ctx context.Context) Crawler {
-	return &crawler{
+func New(options ...Option) (*Crawler, error) {
+	c := &Crawler{
 		client: &http.Client{
 			Transport: &http.Transport{
 				MaxIdleConnsPerHost: 20,
 			},
 			Timeout: time.Duration(time.Second * 10),
 		},
-		options: opts,
-		ctx:     ctx,
+		followHosts: map[string]bool{},
 	}
+	for _, option := range options {
+		if err := option(c); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
-func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
-	resp := &CrawlResponse{
-		Request: req,
-	}
-
+func (c *Crawler) Do(req *Request) (*Response, error) {
 	hreq, err := http.NewRequest("GET", req.URL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	hreq = hreq.WithContext(c.ctx)
-	hreq.Header.Set("User-Agent", UserAgent)
+	if c.ctx != nil {
+		hreq = hreq.WithContext(c.ctx)
+	}
+	if c.useragent != "" {
+		hreq.Header.Set("User-Agent", c.useragent)
+	}
 
 	start := time.Now()
 	hresp, err := c.client.Do(hreq)
@@ -69,7 +64,6 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 	if err := func() error {
 		defer hresp.Body.Close()
 		b, err := ioutil.ReadAll(hresp.Body) // TODO: allow cancellation
-		resp.ContentLength = int64(len(b))
 		if strings.HasPrefix(hresp.Header.Get("Content-Type"), "text/html") {
 			body = string(b)
 		}
@@ -78,9 +72,13 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 		return nil, err
 	}
 
-	resp.Duration = time.Since(start)
-	resp.StatusCode = hresp.StatusCode
-	resp.ContentType = hresp.Header.Get("Content-Type")
+	resp := &Response{
+		Request:       req,
+		StatusCode:    hresp.StatusCode,
+		Duration:      time.Since(start),
+		ContentLength: hresp.ContentLength,
+		ContentType:   hresp.Header.Get("Content-Type"),
+	}
 	if resp.ContentType == "" {
 		resp.ContentType = "-"
 	} else {
@@ -107,18 +105,56 @@ func (c *crawler) Do(req *CrawlRequest) (*CrawlResponse, error) {
 			if err != nil {
 				continue // ignore broken URLs
 			}
-			if c.options.Hosts[furl.Host] {
+			if c.followHosts[furl.Host] {
 				resp.URLs = append(resp.URLs, furl.String())
 			}
 		}
 	}
-
 	c.stats.AddResponse(resp)
-
 	return resp, nil
 }
 
-func (c *crawler) Stats() *CrawlerStats {
+func (c *Crawler) Crawl(q *Queue, workers int) *Stats {
+	if q.length == 0 {
+		panic("cannot crawl an empty queue")
+	}
+	wg := &sync.WaitGroup{}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				req, ok := q.Dequeue()
+				if !ok {
+					break
+				}
+
+				resp, err := c.Do(req)
+				if err != nil {
+					fmt.Fprintf(os.Stdout, "%v\n", err)
+					q.Done()
+					continue
+				}
+
+				reqs := make([]*Request, 0, len(resp.URLs))
+				for _, u := range resp.URLs {
+					if i := strings.Index(u, "#"); i != -1 {
+						u = u[:i] // ignore URL fragment
+					}
+					req, err := NewRequest(u, !c.noFollow)
+					if err != nil {
+						panic(err) // TODO
+					}
+					reqs = append(reqs, req)
+				}
+				go q.Enqueue(reqs...) // never block dequeuing goroutines
+				fmt.Printf("%-26s %v\n", time.Now().Format("2006-01-02 15:04:05.999999"), resp)
+				q.Done()
+			}
+		}()
+		//time.Sleep(time.Millisecond * 100) // slow start
+	}
+	wg.Wait()
 	return &c.stats
 }
 

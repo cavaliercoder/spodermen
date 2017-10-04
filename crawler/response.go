@@ -1,4 +1,4 @@
-package main
+package crawler
 
 import (
 	"bytes"
@@ -7,12 +7,7 @@ import (
 	"time"
 )
 
-const (
-	// CrawlResponseTemplate is the template used to print the outcome of a CrawlRequest.
-	CrawlResponseTemplate = "\x1b[95mGET\x1b[0m {{.Request.URL}} {{colorize .StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}"
-)
-
-var crawlResponseTemplate = func() *template.Template {
+var responseTemplate = func() *template.Template {
 	t, err := template.New("crawl_response").
 		Funcs(template.FuncMap{
 			"ms": func(d time.Duration) int {
@@ -25,17 +20,16 @@ var crawlResponseTemplate = func() *template.Template {
 				return fmt.Sprintf("\x1b[31m%d\x1b[0m", status)
 			},
 		}).
-		Parse(CrawlResponseTemplate)
+		Parse("\x1b[95mGET\x1b[0m {{.Request.URL}} {{colorize .StatusCode}} {{.ContentType}} {{.ContentLength}} {{ms .Duration}}")
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("error parsing response template: %v", err))
 	}
-
 	return t
 }()
 
-// A CrawlResponse is represents the outcome of a CrawlRequest.
-type CrawlResponse struct {
-	Request       *CrawlRequest
+// A Response is represents the outcome of a CrawlRequest.
+type Response struct {
+	Request       *Request
 	Duration      time.Duration
 	StatusCode    int
 	ContentLength int64
@@ -43,8 +37,8 @@ type CrawlResponse struct {
 	URLs          []string
 }
 
-func (c *CrawlResponse) String() string {
+func (c *Response) String() string {
 	w := &bytes.Buffer{}
-	crawlResponseTemplate.Execute(w, c)
+	responseTemplate.Execute(w, c)
 	return w.String()
 }

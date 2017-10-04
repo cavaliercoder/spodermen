@@ -1,12 +1,12 @@
-package main
+package crawler
 
 import (
 	"encoding/json"
 	"sync"
 )
 
-// CrawlerStats collects transfer statistics for a Crawler.
-type CrawlerStats struct {
+// Stats collects transfer statistics for a Crawler.
+type Stats struct {
 	sync.Mutex
 	TotalRequests int32
 	TotalBytes    int64
@@ -15,7 +15,7 @@ type CrawlerStats struct {
 }
 
 // AddResponse increments all statistics according to the given response.
-func (c *CrawlerStats) AddResponse(resp *CrawlResponse) {
+func (c *Stats) AddResponse(resp *Response) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -34,7 +34,7 @@ func (c *CrawlerStats) AddResponse(resp *CrawlResponse) {
 }
 
 // JSON returns a JSON representation of the crawler statistics.
-func (c *CrawlerStats) JSON() string {
+func (c *Stats) JSON() string {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err.Error()

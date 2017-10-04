@@ -1,11 +1,11 @@
-package main
+package crawler
 
 import (
 	"context"
 	"sync"
 )
 
-type CrawlRequestQueue struct {
+type Queue struct {
 	sync.Mutex
 
 	in        int
@@ -13,7 +13,7 @@ type CrawlRequestQueue struct {
 	length    int
 	inProcess int
 	done      bool
-	queue     []*CrawlRequest
+	queue     []*Request
 	inCond    *sync.Cond
 	outCond   *sync.Cond
 	ctx       context.Context
@@ -21,12 +21,12 @@ type CrawlRequestQueue struct {
 	seen      map[string]int
 }
 
-func NewCrawlRequestQueue(size int, ctx context.Context) *CrawlRequestQueue {
+func NewQueue(size int, ctx context.Context) *Queue {
 	if size < 1 {
 		panic("invalid queue size")
 	}
-	q := &CrawlRequestQueue{
-		queue: make([]*CrawlRequest, size),
+	q := &Queue{
+		queue: make([]*Request, size),
 		seen:  make(map[string]int, 0),
 	}
 	q.inCond = sync.NewCond(q)
@@ -42,39 +42,33 @@ func NewCrawlRequestQueue(size int, ctx context.Context) *CrawlRequestQueue {
 	return q
 }
 
-func (q *CrawlRequestQueue) Enqueue(reqs ...*CrawlRequest) {
-	// run in another goroutine so we don't block caller if the queue is full
-	// BUG: number of goroutines can explode if the queue is under pressure -
-	// can result in: net/http: request canceled (Client.Timeout exceeded while
-	// reading body)
-	go func() {
-		q.Lock()
-		defer q.Unlock()
+func (q *Queue) Enqueue(reqs ...*Request) {
+	q.Lock()
+	defer q.Unlock()
 
-		for _, req := range reqs {
-			u := req.URL.String()
-			if _, ok := q.seen[u]; ok {
-				continue // skip duplicate request
-			}
-
-			for !q.done && q.length == len(q.queue) {
-				q.inCond.Wait() // wait for capacity
-			}
-			if q.done {
-				return
-			}
-
-			// enqueue request
-			q.seen[u]++
-			q.length++
-			q.queue[q.in] = req
-			q.in = (q.in + 1) % len(q.queue)
-			q.outCond.Signal()
+	for _, req := range reqs {
+		u := req.URL.String()
+		if _, ok := q.seen[u]; ok {
+			continue // skip duplicate request
 		}
-	}()
+
+		for !q.done && q.length == len(q.queue) {
+			q.inCond.Wait() // wait for capacity
+		}
+		if q.done {
+			return
+		}
+
+		// enqueue request
+		q.seen[u]++
+		q.length++
+		q.queue[q.in] = req
+		q.in = (q.in + 1) % len(q.queue)
+		q.outCond.Signal()
+	}
 }
 
-func (q *CrawlRequestQueue) Dequeue() (*CrawlRequest, bool) {
+func (q *Queue) Dequeue() (*Request, bool) {
 	q.Lock()
 	defer q.Unlock()
 	for !q.done && q.length == 0 {
@@ -95,7 +89,7 @@ func (q *CrawlRequestQueue) Dequeue() (*CrawlRequest, bool) {
 }
 
 // Done decrements the number of queue items in-process.
-func (q *CrawlRequestQueue) Done() {
+func (q *Queue) Done() {
 	q.Lock()
 	defer q.Unlock()
 	q.inProcess--
@@ -104,12 +98,12 @@ func (q *CrawlRequestQueue) Done() {
 	}
 }
 
-func (q *CrawlRequestQueue) Close() {
+func (q *Queue) Close() {
 	q.cancel() // cancel via context
 }
 
 // close is called when ctx is cancelled
-func (q *CrawlRequestQueue) close() {
+func (q *Queue) close() {
 	q.Lock()
 	defer q.Unlock()
 	q.done = true
