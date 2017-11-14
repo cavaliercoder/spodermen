@@ -12,7 +12,7 @@ spodermen: $(SOURCES)
 clean:
 	go clean -x
 
-install:
+install: spodermen
 	install -v -C -m 0755 spodermen $(DESTDIR)$(bindir)/spodermen
 
 .PHONY: all clean

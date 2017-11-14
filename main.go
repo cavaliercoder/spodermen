@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"time"
 
 	"./crawler"
 	"gopkg.in/urfave/cli.v1"
@@ -82,17 +83,20 @@ func crawl(c *cli.Context) error {
 	q := crawler.NewQueue(4096, ctx)
 	if path := c.String("file"); path != "" {
 		// read URL list from a text file
-		v, err := loadURLFile(path, c.String("prefix"))
+		urls, err := loadURLFile(path, c.String("prefix"))
 		if err != nil {
 			return err
 		}
-		for _, u := range v {
-			req, err := crawler.NewRequest(u, !noFollow)
-			if err != nil {
-				panic(err) // TODO
+		go func(urls []string) {
+			for _, u := range urls {
+				req, err := crawler.NewRequest(u, !noFollow)
+				if err != nil {
+					panic(err) // TODO
+				}
+				q.Enqueue(req)
 			}
-			q.Enqueue(req)
-		}
+		}(urls)
+		time.Sleep(time.Second / 5) // seed queue
 	} else {
 		// read URL list from Args
 		for _, u := range c.Args() {
