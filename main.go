@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"time"
 
-	"./crawler"
+	"github.com/cavaliercoder/spodermen/crawler"
 	"gopkg.in/urfave/cli.v1"
 )
 
